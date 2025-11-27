@@ -1,5 +1,5 @@
 # MCDP_MLSTM
 
-Multiplicatively Coupled Dual Path Matrix LSTM Alternative to Attention
+Attention Mechanism Replacement by a Multiplicatively Coupled Dual Path Matrix LSTM
 
 Paper Coming Soon
