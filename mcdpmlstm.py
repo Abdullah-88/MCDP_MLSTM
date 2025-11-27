@@ -8,10 +8,7 @@ import math
 
 
 class LinearHeadwiseExpand(nn.Module):
-    """
-    This is a structured projection layer that projects the input to a higher dimension.
-    It only allows integer up-projection factors, i.e. the output dimension is a multiple of the input dimension.
-    """
+   
 
     def __init__(self, dim, num_heads, bias=False):
         super().__init__()
@@ -53,24 +50,20 @@ class LinearHeadwiseExpand(nn.Module):
 
 
 def wang_init_(param: torch.Tensor, dim: int, num_blocks: int):
-    """ Adopted from https://github.com/EleutherAI/gpt-neox/blob/main/megatron/model/init_functions.py. """
+   
     std = 2 / num_blocks / math.sqrt(dim)
     torch.nn.init.normal_(param, mean=0.0, std=std)
     return param
 
 def small_init_(param: torch.Tensor, dim: int) -> torch.Tensor:
-    """
-    Fills the input Tensor with values according to the method described in Transformers without Tears: Improving
-    the Normalization of Self-Attention - Nguyen, T. & Salazar, J. (2019), using a normal distribution.
-    Adopted from https://github.com/EleutherAI/gpt-neox/blob/main/megatron/model/init_functions.py.
-    """
+
     std = math.sqrt(2 / (5 * dim))
     torch.nn.init.normal_(param, mean=0.0, std=std)
     return param
 
 
 def bias_linspace_init_(param: torch.Tensor, start: float = 3.4, end: float = 6.0) -> torch.Tensor:
-    """Linearly spaced bias init across dimensions."""
+
     assert param.dim() == 1, f"param must be 1-dimensional (typically a bias), got {param.dim()}"
     n_dims = param.shape[0]
     init_vals = torch.linspace(start, end, n_dims)
@@ -81,18 +74,7 @@ def bias_linspace_init_(param: torch.Tensor, start: float = 3.4, end: float = 6.
 
 
 class CausalConv1d(nn.Module):
-    """
-    Implements causal depthwise convolution of a time series tensor.
-    Input:  Tensor of shape (B,T,F), i.e. (batch, time, feature)
-    Output: Tensor of shape (B,T,F)
-    Args:
-        feature_dim: number of features in the input tensor
-        kernel_size: size of the kernel for the depthwise convolution
-        causal_conv_bias: whether to use bias in the depthwise convolution
-        channel_mixing: whether to use channel mixing (i.e. groups=1) or not (i.e. groups=feature_dim)
-                        If True, it mixes the convolved features across channels.
-                        If False, all the features are convolved independently.
-    """
+  
 
     def __init__(self, dim, kernel_size=4, bias=True):
         super().__init__()
@@ -115,18 +97,17 @@ class CausalConv1d(nn.Module):
         self.conv.reset_parameters()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # conv requires dim first
+      
         x = einops.rearrange(x, "b l d -> b d l")
-        # causal conv1d
+       
         x = self.conv(x)
         x = x[:, :, :-self.pad]
-        # back to dim last
+      
         x = einops.rearrange(x, "b d l -> b l d")
         return x
 
 class LayerNorm(nn.Module):
-    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False. """
-
+   
     def __init__(
             self,
             ndim: int = -1,
@@ -184,7 +165,7 @@ class MultiHeadLayerNorm(LayerNorm):
             bias=self.bias,
             eps=self.eps,
         )  # .to(x.dtype)
-        # (B * S), (NH * DH) -> (B, S, NH, DH) -> (B, NH, S, DH)
+        
         out = out.view(B, S, NH, DH).transpose(1, 2)
         return out
 
@@ -199,28 +180,12 @@ def parallel_stabilized_simple(
         stabilize_rowwise: bool = True,
         eps: float = 1e-6,
 ) -> torch.Tensor:
-    """
-    This is the mLSTM cell in parallel form.
-    This version is stabilized. We control the range of exp() arguments by
-    ensuring that they are always smaller than 0.0 by subtracting the maximum.
-    Args:
-        :param queries: (torch.Tensor) (B, NH, S, DH)
-        :param keys: (torch.Tensor) (B, NH, S, DH)
-        :param values: (torch.Tensor) (B, NH, S, DH)
-        :param igate_preact: (torch.Tensor) (B, NH, S, 1)
-        :param fgate_preact: (torch.Tensor) (B, NH, S, 1)
-        :param lower_triangular_matrix: (torch.Tensor) (S,S). Defaults to None.
-        :param stabilize_rowwise: (bool) Wether to stabilize the combination matrix C rowwise (take maximum per row).
-            Alternative: Subtract the maximum over all rows. Defaults to True.
-        :param eps: (float) small constant to avoid division by 0. Defaults to 1e-6.
-    Returns:
-        torch.Tensor: (B, NH, S, DH), h_tilde_state
-    """
+   
 
     B, NH, S, DH = queries.shape
     _dtype, _device = queries.dtype, queries.device
 
-    # forget gate matrix
+  
     log_fgates = torch.nn.functional.logsigmoid(fgate_preact)  # (B, NH, S, 1)
     if lower_triangular_matrix is None or S < lower_triangular_matrix.size(-1):
         ltr = torch.tril(torch.ones((S, S), dtype=torch.bool, device=_device))
@@ -234,41 +199,36 @@ def parallel_stabilized_simple(
             torch.cumsum(log_fgates, dim=-2),
         ],
         dim=-2,
-    )  # (B, NH, S+1, 1)
-    # for each batch/head this is a matrix of shape (S+1, S+1) containing the cumsum of the log forget gate values
-    # in the second dimension (colum dimension). Each row has the same is a copy of the first row.
-    # First entry of each row is zero.
-    rep_log_fgates_cumsum = log_fgates_cumsum.repeat(1, 1, 1, S + 1)  # (B, NH, S+1, S+1)
-    # Now in each row cut off / subtract the forgetgate values of the later timesteps
-    # where col j > row i
-    _log_fg_matrix = rep_log_fgates_cumsum - rep_log_fgates_cumsum.transpose(-2, -1)  # (B, NH, S+1, S+1)
-    # Causal masking & selection of the correct submatrix, such that forgetgate at timestep t is not applied
-    # to the input at timestep t
-    log_fg_matrix = torch.where(ltr, _log_fg_matrix[:, :, 1:, 1:], -float("inf"))  # (B, NH, S, S)
+    )  
+    
+    rep_log_fgates_cumsum = log_fgates_cumsum.repeat(1, 1, 1, S + 1)  
+  
+    _log_fg_matrix = rep_log_fgates_cumsum - rep_log_fgates_cumsum.transpose(-2, -1)  
+  
+    log_fg_matrix = torch.where(ltr, _log_fg_matrix[:, :, 1:, 1:], -float("inf")) 
 
-    # gate decay matrix D (combination of forget gate and input gate)
-    log_D_matrix = log_fg_matrix + igate_preact.transpose(-2, -1)  # (B, NH, S, S)
-    # D matrix stabilization
+  
+    log_D_matrix = log_fg_matrix + igate_preact.transpose(-2, -1)  
+  
     if stabilize_rowwise:
-        max_log_D, _ = torch.max(log_D_matrix, dim=-1, keepdim=True)  # (B, NH, S, 1)
+        max_log_D, _ = torch.max(log_D_matrix, dim=-1, keepdim=True)  
     else:
         max_log_D = torch.max(log_D_matrix.view(B, NH, -1), dim=-1, keepdim=True)[0].unsqueeze(-1)
-        # (B, NH, 1, 1)
-    log_D_matrix_stabilized = log_D_matrix - max_log_D  # (B, NH, S, S)
-    D_matrix = torch.exp(log_D_matrix_stabilized)  # (B, NH, S, S)
+       
+    log_D_matrix_stabilized = log_D_matrix - max_log_D  
+    D_matrix = torch.exp(log_D_matrix_stabilized)  
 
     keys_scaled = keys / math.sqrt(DH)
 
-    # combination matrix C
-    qk_matrix = queries @ keys_scaled.transpose(-2, -1)  # (B, NH, S, S)
+  
+    qk_matrix = queries @ keys_scaled.transpose(-2, -1)  
     C_matrix = qk_matrix * D_matrix  # (B, NH, S, S)
     normalizer = torch.maximum(C_matrix.sum(dim=-1, keepdim=True).abs(), torch.exp(-max_log_D))  # (B, NH, S, 1)
-    # (B, NH, S, S)
+   
     C_matrix_normalized = C_matrix / (normalizer + eps)
 
-    # retrieved values
-    h_tilde_state = C_matrix_normalized @ values  # (B, NH, S, DH)
-
+   
+    h_tilde_state = C_matrix_normalized @ values  
     return h_tilde_state
 
 class MatrixLSTMCell(nn.Module):
@@ -284,24 +244,24 @@ class MatrixLSTMCell(nn.Module):
         self.reset_parameters()
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        B, S, _ = q.shape  # (B, S, H)
+        B, S, _ = q.shape  
 
         if_gate_input = torch.cat([q, k, v], dim=-1)
-        q = q.view(B, S, self.num_heads, -1)  # (B, S, NH, DH)
-        k = k.view(B, S, self.num_heads, -1)  # (B, S, NH, DH)
-        v = v.view(B, S, self.num_heads, -1)  # (B, S, NH, DH)
+        q = q.view(B, S, self.num_heads, -1)  
+        k = k.view(B, S, self.num_heads, -1)  
+        v = v.view(B, S, self.num_heads, -1)  
 
-        q = q.transpose(1, 2)  # (B, NH, S, DH)
-        k = k.transpose(1, 2)  # (B, NH, S, DH)
-        v = v.transpose(1, 2)  # (B, NH, S, DH)
+        q = q.transpose(1, 2)  
+        k = k.transpose(1, 2) 
+        v = v.transpose(1, 2)  
 
-        # compute input and forget gate pre-activations
-        igate_preact = self.igate(if_gate_input)  # (B, S, NH)
-        igate_preact = igate_preact.transpose(-1, -2).unsqueeze(-1)  # (B, NH, S, 1)
-        fgate_preact = self.fgate(if_gate_input)  # (B, S, NH)
-        fgate_preact = fgate_preact.transpose(-1, -2).unsqueeze(-1)  # (B, NH, S, 1)#
+  
+        igate_preact = self.igate(if_gate_input)  
+        igate_preact = igate_preact.transpose(-1, -2).unsqueeze(-1)  
+        fgate_preact = self.fgate(if_gate_input)  
+        fgate_preact = fgate_preact.transpose(-1, -2).unsqueeze(-1)  
 
-        # cache causal mask to avoid memory allocation in every iteration
+    
         if S in self.causal_mask_cache:
             causal_mask = self.causal_mask_cache[(S, str(q.device))]
         else:
@@ -315,19 +275,18 @@ class MatrixLSTMCell(nn.Module):
             igate_preact=igate_preact,
             fgate_preact=fgate_preact,
             lower_triangular_matrix=causal_mask,
-        )  # (B, NH, S, DH)
+        )  
 
-        h_state_norm = self.outnorm(h_state)  # (B, NH, S, DH)
-        h_state_norm = h_state_norm.transpose(1, 2).reshape(B, S, -1)  # (B, NH, S, DH) -> (B, S, NH, DH) -> (B, S, H)
-
+        h_state_norm = self.outnorm(h_state)  
+        h_state_norm = h_state_norm.transpose(1, 2).reshape(B, S, -1)  
         return h_state_norm
 
     def reset_parameters(self):
         self.outnorm.reset_parameters()
-        # forget gate initialization
+    
         torch.nn.init.zeros_(self.fgate.weight)
         bias_linspace_init_(self.fgate.bias, start=3.0, end=6.0)
-        # input gate initialization
+    
         torch.nn.init.zeros_(self.igate.weight)
         torch.nn.init.normal_(self.igate.bias, mean=0.0, std=0.1)
 
@@ -397,11 +356,11 @@ class mLSTM(nn.Module):
         B, S, _ = x.shape
 
        
-        # up-projection
+    
         x_inner = self.proj_up(x)
         x_mlstm, z = torch.chunk(x_inner, chunks=2, dim=-1)
 
-        # mlstm branch
+    
         x_mlstm_conv = self.conv1d(x_mlstm)
         x_mlstm_conv_act = F.silu(x_mlstm_conv)
         q = self.q_proj(x_mlstm_conv_act)
@@ -410,10 +369,10 @@ class mLSTM(nn.Module):
         h_tilde_state = self.mlstm_cell(q=q, k=k, v=v)
         h_tilde_state_skip = h_tilde_state + (self.learnable_skip * x_mlstm_conv_act)
 
-        # output / z branch
+    
         h_state = h_tilde_state_skip * F.silu(z)
 
-        # down-projection
+  
         x = self.proj_down(h_state)
 
         
@@ -421,11 +380,11 @@ class mLSTM(nn.Module):
         return x
 
     def reset_parameters(self):
-        # init inproj
+    
         small_init_(self.proj_up.weight, dim=self.dim)
         if self.proj_up.bias is not None:
             nn.init.zeros_(self.proj_up.bias)
-        # init outproj (original mLSTM uses num_blocks=1)
+   
         wang_init_(self.proj_down.weight, dim=self.dim, num_blocks=1)
         if self.proj_down.bias is not None:
             nn.init.zeros_(self.proj_down.bias)
@@ -433,7 +392,7 @@ class mLSTM(nn.Module):
         nn.init.ones_(self.learnable_skip)
 
         def _init_qkv_proj(qkv_proj: LinearHeadwiseExpand):
-            # use the embedding dim instead of the inner embedding dim
+         
             small_init_(qkv_proj.weight, dim=self.dim)
             if qkv_proj.bias is not None:
                 nn.init.zeros_(qkv_proj.bias)
