@@ -81,7 +81,7 @@ class CausalConv1d(nn.Module):
         self.dim = dim
         self.kernel_size = kernel_size
         self.bias = bias
-        # padding of this size assures temporal causality.
+      
         self.pad = kernel_size - 1
         self.conv = nn.Conv1d(
             in_channels=dim,
@@ -153,18 +153,18 @@ class LayerNorm(nn.Module):
 
 class MultiHeadLayerNorm(LayerNorm):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        assert x.ndim == 4, "Input must be 4D tensor (B, NH, S, DH)"
+        assert x.ndim == 4, 
         B, NH, S, DH = x.shape
 
-        gn_in_1 = x.transpose(1, 2)  # (B, S, NH, DH)
-        gn_in_2 = gn_in_1.reshape(B * S, NH * DH)  # (B * S, NH * DH)
+        gn_in_1 = x.transpose(1, 2)  
+        gn_in_2 = gn_in_1.reshape(B * S, NH * DH)  
         out = F.group_norm(
             gn_in_2,
             num_groups=NH,
             weight=self.weight_proxy,
             bias=self.bias,
             eps=self.eps,
-        )  # .to(x.dtype)
+        ) 
         
         out = out.view(B, S, NH, DH).transpose(1, 2)
         return out
@@ -186,7 +186,7 @@ def parallel_stabilized_simple(
     _dtype, _device = queries.dtype, queries.device
 
   
-    log_fgates = torch.nn.functional.logsigmoid(fgate_preact)  # (B, NH, S, 1)
+    log_fgates = torch.nn.functional.logsigmoid(fgate_preact)  
     if lower_triangular_matrix is None or S < lower_triangular_matrix.size(-1):
         ltr = torch.tril(torch.ones((S, S), dtype=torch.bool, device=_device))
     else:
@@ -222,8 +222,8 @@ def parallel_stabilized_simple(
 
   
     qk_matrix = queries @ keys_scaled.transpose(-2, -1)  
-    C_matrix = qk_matrix * D_matrix  # (B, NH, S, S)
-    normalizer = torch.maximum(C_matrix.sum(dim=-1, keepdim=True).abs(), torch.exp(-max_log_D))  # (B, NH, S, 1)
+    C_matrix = qk_matrix * D_matrix  
+    normalizer = torch.maximum(C_matrix.sum(dim=-1, keepdim=True).abs(), torch.exp(-max_log_D))  
    
     C_matrix_normalized = C_matrix / (normalizer + eps)
 
@@ -402,7 +402,6 @@ class mLSTM(nn.Module):
         _init_qkv_proj(self.v_proj)
 
         self.mlstm_cell.reset_parameters()
-
 
 
 
