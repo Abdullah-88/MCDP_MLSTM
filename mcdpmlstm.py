@@ -6,10 +6,8 @@ import einops
 from einops.layers.torch import Rearrange
 import math
 
-
 class LinearHeadwiseExpand(nn.Module):
    
-
     def __init__(self, dim, num_heads, bias=False):
         super().__init__()
         assert dim % num_heads == 0
@@ -48,7 +46,6 @@ class LinearHeadwiseExpand(nn.Module):
             f"bias={self.bias is not None}, "
         )
 
-
 def wang_init_(param: torch.Tensor, dim: int, num_blocks: int):
    
     std = 2 / num_blocks / math.sqrt(dim)
@@ -61,7 +58,6 @@ def small_init_(param: torch.Tensor, dim: int) -> torch.Tensor:
     torch.nn.init.normal_(param, mean=0.0, std=std)
     return param
 
-
 def bias_linspace_init_(param: torch.Tensor, start: float = 3.4, end: float = 6.0) -> torch.Tensor:
 
     assert param.dim() == 1, f"param must be 1-dimensional (typically a bias), got {param.dim()}"
@@ -71,17 +67,14 @@ def bias_linspace_init_(param: torch.Tensor, start: float = 3.4, end: float = 6.
         param.copy_(init_vals)
     return param
 
-
-
 class CausalConv1d(nn.Module):
   
-
     def __init__(self, dim, kernel_size=4, bias=True):
         super().__init__()
         self.dim = dim
         self.kernel_size = kernel_size
         self.bias = bias
-      
+       
         self.pad = kernel_size - 1
         self.conv = nn.Conv1d(
             in_channels=dim,
@@ -164,11 +157,10 @@ class MultiHeadLayerNorm(LayerNorm):
             weight=self.weight_proxy,
             bias=self.bias,
             eps=self.eps,
-        ) 
+        )  
         
         out = out.view(B, S, NH, DH).transpose(1, 2)
         return out
-
 
 def parallel_stabilized_simple(
         queries: torch.Tensor,
@@ -181,10 +173,8 @@ def parallel_stabilized_simple(
         eps: float = 1e-6,
 ) -> torch.Tensor:
    
-
     B, NH, S, DH = queries.shape
     _dtype, _device = queries.dtype, queries.device
-
   
     log_fgates = torch.nn.functional.logsigmoid(fgate_preact)  
     if lower_triangular_matrix is None or S < lower_triangular_matrix.size(-1):
@@ -219,14 +209,12 @@ def parallel_stabilized_simple(
     D_matrix = torch.exp(log_D_matrix_stabilized)  
 
     keys_scaled = keys / math.sqrt(DH)
-
   
     qk_matrix = queries @ keys_scaled.transpose(-2, -1)  
     C_matrix = qk_matrix * D_matrix  
     normalizer = torch.maximum(C_matrix.sum(dim=-1, keepdim=True).abs(), torch.exp(-max_log_D))  
    
     C_matrix_normalized = C_matrix / (normalizer + eps)
-
    
     h_tilde_state = C_matrix_normalized @ values  
     return h_tilde_state
@@ -254,13 +242,11 @@ class MatrixLSTMCell(nn.Module):
         q = q.transpose(1, 2)  
         k = k.transpose(1, 2) 
         v = v.transpose(1, 2)  
-
   
         igate_preact = self.igate(if_gate_input)  
         igate_preact = igate_preact.transpose(-1, -2).unsqueeze(-1)  
         fgate_preact = self.fgate(if_gate_input)  
         fgate_preact = fgate_preact.transpose(-1, -2).unsqueeze(-1)  
-
     
         if S in self.causal_mask_cache:
             causal_mask = self.causal_mask_cache[(S, str(q.device))]
@@ -293,8 +279,7 @@ class MatrixLSTMCell(nn.Module):
 class mLSTM(nn.Module):
     def __init__(
             self,
-            dim,
-          
+            dim,          
             expansion=2,
             qkv_block_size=4,
             proj_bias=False,
@@ -354,12 +339,9 @@ class mLSTM(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, S, _ = x.shape
-
-       
     
         x_inner = self.proj_up(x)
         x_mlstm, z = torch.chunk(x_inner, chunks=2, dim=-1)
-
     
         x_mlstm_conv = self.conv1d(x_mlstm)
         x_mlstm_conv_act = F.silu(x_mlstm_conv)
@@ -368,14 +350,10 @@ class mLSTM(nn.Module):
         v = self.v_proj(x_mlstm)
         h_tilde_state = self.mlstm_cell(q=q, k=k, v=v)
         h_tilde_state_skip = h_tilde_state + (self.learnable_skip * x_mlstm_conv_act)
-
     
         h_state = h_tilde_state_skip * F.silu(z)
-
   
         x = self.proj_down(h_state)
-
-        
 
         return x
 
@@ -403,11 +381,6 @@ class mLSTM(nn.Module):
 
         self.mlstm_cell.reset_parameters()
 
-
-
-
-
-
 class FeedForward(nn.Module):
     def __init__(self, dim, hidden_dim, dropout):
         super().__init__()
@@ -421,16 +394,12 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-
-
-
 class MCGatingUnit(nn.Module):
     def __init__(self,dim, hidden_dim, dropout):
         super().__init__()
         self.mlstm_1 = mLSTM(dim)      
         self.mlstm_2 = mLSTM(dim)
        
-
     def forward(self, x):
         u, v = x, x 
         u = self.mlstm_1(u)   
@@ -438,9 +407,8 @@ class MCGatingUnit(nn.Module):
         out = u * v
         return out
 
-
 class MCDPMLSTMBlock(nn.Module):
-    def __init__(self, d_model, d_ffn,dropout):
+    def __init__(self, d_model, d_ffn, dropout):
         super().__init__()
        
         self.norm = nn.LayerNorm(d_model)       
@@ -457,22 +425,13 @@ class MCDPMLSTMBlock(nn.Module):
         out = x + residual
         return out
 
-
 class MCDPMLSTM(nn.Module):
-    def __init__(self, d_model, d_ffn,num_layers,dropout):
+    def __init__(self, d_model, d_ffn, num_layers, dropout):
         super().__init__()
         
         self.model = nn.Sequential(
-            *[MCDPMLSTMBlock(d_model, d_ffn,dropout) for _ in range(num_layers)]
+            *[MCDPMLSTMBlock(d_model, d_ffn, dropout) for _ in range(num_layers)]
         )
 
     def forward(self, x):
         return self.model(x)
-
-
-
-
-
-
-
-
